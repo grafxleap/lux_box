@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>LUX.BOX prototype</title>
+<style>
+  :root { --bg: #0d0d0d; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; }
+  #stage {
+    position: absolute; inset: 0; margin: auto;
+    width: min(100vw, calc(100vh * 9 / 16)); height: min(100vh, calc(100vw * 16 / 9));
+    background: var(--bg); overflow: hidden;
+  }
+  @media (max-aspect-ratio: 9/16) { #stage { width: 100vw; height: 100vh; } }
+  canvas { display: block; width: 100%; height: 100%; }
+  #loading {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    color: #8a8a8a; font: 300 15px/1.4 'Cormorant Garamond', serif; letter-spacing: .35em; pointer-events: none;
+    transition: opacity .4s ease; z-index: 3;
+  }
+  /* progress bar under LOADING: thin and subtle */
+  #loading .loading-in { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #loading .loading-in span { margin-right: -.35em; }      /* the letter spacing leaves a gap after the last letter */
+  #bar { width: 96px; height: 1px; background: rgba(255, 255, 255, .10); overflow: hidden; }
+  #bar-fill { width: 100%; height: 100%; background: rgba(255, 255, 255, .55); transform: scaleX(0); transform-origin: left;
+                 transition: transform .35s ease-out; }
+  /* ---- interface: design units (1 Figma pt = --u px; the screen is 360 pt wide) ---- */
+  #ui { position: absolute; inset: 0; pointer-events: none; z-index: 2; --u: 1px; }
+  #ui .el { position: absolute; left: calc(var(--x) * var(--u)); top: calc(var(--y) * var(--u));
+            width: calc(var(--w) * var(--u)); height: calc(var(--h) * var(--u)); }
+  #ui .el > img { display: block; width: 100%; height: 100%; }
+  /* Figma's frosted glass (11.32 pt background blur): here the browser does it for real */
+  #ui .glass { -webkit-backdrop-filter: blur(calc(11.32 * var(--u))); backdrop-filter: blur(calc(11.32 * var(--u))); }
+  #ui .round { border-radius: 50%; }
+  #ui .group { transition: opacity .5s linear; }
+  #ui .hidden { opacity: 0; }
+  #bottom { position: absolute; left: 0; right: 0; bottom: calc(16.33 * var(--u)); height: calc(94.67 * var(--u)); }
+  #swiper { position: absolute; left: calc(31.33 * var(--u)); top: 0; width: calc(297.33 * var(--u)); height: 100%; }
+  #swiper img { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #swipe-word { filter: brightness(1.5); }      /* SWIPE TO OPEN: a lighter grey than the render's */
+  #knob-zone { position: absolute; width: calc(65 * var(--u)); height: calc(65 * var(--u)); border-radius: 50%;
+               left: calc((47.33 - 32.5) * var(--u)); top: calc((47.33 - 32.5) * var(--u)); pointer-events: auto; cursor: grab; touch-action: none; }
+  /* recents: endless strip, draggable with the finger */
+  #recents-zone { position: absolute; left: 0; right: 0; top: calc(128 * var(--u)); height: calc(64 * var(--u)); pointer-events: auto; touch-action: none; cursor: grab; }
+  #group-recents.hidden #recents-zone { pointer-events: none; }
+  /* ---- version B: the sequence is real-time 3D as well ---- */
+  canvas { position: relative; z-index: 1; }
+  /* intro: while it loads only LOADING shows; then each element enters with its own animation */
+  body:not(.ready) #ui { visibility: hidden; }
+  body:not(.ready) canvas { opacity: 0; }
+  body.entering canvas { transition: opacity 1.3s ease; }
+  body.entering #group-recents { animation: fadeIn 1s ease .35s both; }
+  body.entering #bottom { animation: riseUp 1.1s cubic-bezier(.22,.8,.3,1) .5s both; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes riseUp { from { transform: translateY(130%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  /* detail: back button (the swipe knob, mirrored) and information block */
+  #back { position: absolute; left: calc(17.88 * var(--u)); top: calc(114.5 * var(--u)); width: calc(36 * var(--u)); height: calc(36 * var(--u));
+            border: 0; padding: 0; background: none; border-radius: 50%; cursor: pointer; opacity: 0; pointer-events: none; }
+  #back img { width: 100%; height: 100%; display: block; }
+  #info { position: absolute; inset: 0; opacity: 0; font-family: 'Cormorant Garamond', serif; text-align: center; pointer-events: none; }
+  #info .t { position: absolute; left: 0; right: 0; transform: translateY(50%); white-space: nowrap; }
+  #info-model { bottom: calc(141 * var(--u)); font-weight: 300; font-size: calc(13.5 * var(--u)); color: rgb(151, 151, 151); }
+  #info-price { bottom: calc(118.6 * var(--u)); font-weight: 300; font-size: calc(22.5 * var(--u)); color: #fff; }
+  #continueBtn { position: absolute; left: calc(32.85 * var(--u)); width: calc(294.3 * var(--u)); height: calc(52.7 * var(--u));
+               bottom: calc(27.3 * var(--u)); border: 0; border-radius: 999px; background: #fff; color: rgb(6, 6, 6);
+               font: 700 calc(16.4 * var(--u))/1 'Cormorant Garamond', serif; cursor: pointer; }
+</style>
+<link watch="preconnect" href="https://fonts.googleapis.com">
+<link watch="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;700&display=swap">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="stage">
+  <div id="loading"><div class="loading-in"><span>LOADING</span><div id="bar"><div id="bar-fill"></div></div></div></div>
+  <div id="ui">
+    <!-- status bar -->
+    <div class="el" style="--x:16.62;--y:13.82;--w:37;--h:20"><img src="ui/time.png" alt=""></div>
+    <div class="el" style="--x:276.3;--y:21;--w:18;--h:11"><img src="ui/signal.png" alt=""></div>
+    <div class="el" style="--x:300.08;--y:21.03;--w:16;--h:12"><img src="ui/wifi.png" alt=""></div>
+    <div class="el" style="--x:322.33;--y:20.26;--w:25;--h:12"><img src="ui/battery.png" alt=""></div>
+    <!-- header: logo, balance, speaker, menu -->
+    <div id="group-header" class="group">
+      <div class="el" style="--x:17.88;--y:62.47;--w:119;--h:17"><img src="ui/logo.png" alt="LUX.BOX"></div>
+      <div class="el glass" style="--x:187.26;--y:57.56;--w:86;--h:29;border-radius:calc(14.5 * var(--u))"><img src="ui/balance.png" alt=""></div>
+      <div class="el glass round" style="--x:281.43;--y:57.56;--w:29;--h:29"><img src="ui/speaker.png" alt=""></div>
+      <div class="el glass round" style="--x:319.26;--y:57.56;--w:29;--h:29"><img src="ui/menu.png" alt=""></div>
+    </div>
+    <!-- recents: title and cards -->
+    <div id="group-recents" class="group">
+      <div class="el" style="--x:17.88;--y:110.05;--w:88;--h:11"><img src="ui/recents.png" alt="Recently Acquired"></div>
+      <div class="el glass card" style="--x:-32.32;--y:133.08;--w:104;--h:54;border-radius:calc(9.43 * var(--u))"><img src="ui/card.png" alt=""></div>
+      <div class="el glass card" style="--x:79.28;--y:133.08;--w:104;--h:54;border-radius:calc(9.43 * var(--u))"><img src="ui/card.png" alt=""></div>
+      <div class="el glass card" style="--x:190.88;--y:133.08;--w:104;--h:54;border-radius:calc(9.43 * var(--u))"><img src="ui/card.png" alt=""></div>
+      <div class="el glass card" style="--x:302.48;--y:133.08;--w:104;--h:54;border-radius:calc(9.43 * var(--u))"><img src="ui/card.png" alt=""></div>
+      <div class="el glass card" style="--x:414.08;--y:133.08;--w:104;--h:54;border-radius:calc(9.43 * var(--u))"><img src="ui/card.png" alt=""></div>
+      <div id="recents-zone" aria-label="Recently Acquired"></div>
+    </div>
+    <!-- bottom swiper (layers rendered in Cycles) -->
+    <div id="bottom" class="group">
+      <div id="swiper">
+        <img src="ui/swipe_pill.png" alt="">
+        <!-- ON state from your timeline (rims 0.29 -> 0.56, arrow 2.4 -> 50.5): cross-faded with the knob -->
+        <img id="swipe-pill-on" src="ui/swipe_pill_on.png" alt="" style="opacity:0">
+        <img id="swipe-word" src="ui/swipe_word.png" alt="SWIPE">
+        <img id="swipe-knob" src="ui/swipe_knob.png" alt="">
+        <img id="swipe-knob-on" src="ui/swipe_knob_on.png" alt="" style="opacity:0">
+        <!-- arrow light: a halo that grows with the knob -->
+        <img id="swipe-arrow-glow" src="ui/swipe_arrow_glow.png" alt="" style="opacity:0">
+        <div id="knob-zone" aria-label="Swipe to open"></div>
+      </div>
+    </div>
+    <!-- detail -->
+    <button id="back" aria-label="Back"><img src="ui/back_on.png" alt=""></button>
+    <div id="info">
+      <div class="t" id="info-model">Lorem ipsum dolor sit amet</div>
+      <div class="t" id="info-price">Lorem ipsum</div>
+      <button id="continueBtn">Continue</button>
+    </div>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+
+// opened as a file (double click): the browser blocks loading the models; it has to be served over http
+if (location.protocol === 'file:') {
+  document.getElementById('loading').innerHTML =
+    'Open it from<br><b style="color:#ddd">http://localhost:8791</b><br><span style="font-size:12px">(opened as a file, the browser blocks the 3D models)</span>';
+  throw new Error('opened as a file');
+}
+
+// ---- settings (can be changed from the URL: ?light=1.2&exp=1&reflect=0.35&bloom=0.4) ----
+const P = new URLSearchParams(location.search);
+const SETTINGS = {
+  light:   parseFloat(P.get('light')   ?? 1.0),   // multiplier for Blender's lights
+  env: parseFloat(P.get('env') ?? 1.0),   // environment reflection intensity
+  exp:    parseFloat(P.get('exp')    ?? 1.0),   // exposure (AgX)
+  reflect: parseFloat(P.get('reflect') ?? 0.34),  // floor reflection strength (-15% and then -20%)
+  bloom:  parseFloat(P.get('bloom')  ?? 0.2),  // glow strength
+};
+const STEP = THREE.MathUtils.degToRad(45);       // 8 boxes, 45 degrees apart
+const DIR = parseFloat(P.get("dir") ?? 1);       // turn direction relative to the finger
+const SPEED = parseFloat(P.get("speed") ?? 1.782);   // speed of the way back (1 = your timeline's)
+// the opening runs faster, and faster still at the start (290 -> 620): light but not rushed
+const SPEED_OPEN = parseFloat(P.get("speed_open") ?? 1.936), PUSH = parseFloat(P.get("push") ?? 1.0);
+if (P.get('ui') === '0') document.getElementById('ui').style.display = 'none';   // tests: no interface
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, premultipliedAlpha: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+// the final tone comes from Blender's AgX LUT (last composer hiPass), not three.js's AgX
+renderer.toneMapping = THREE.NoToneMapping;
+stage.insertBefore(renderer.domElement, stage.firstChild);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0.023, 0.023, 0.023);   // Blender's world: 0.004 x 5.7
+
+let camera, circle, q0, composer, angle = 0, goal = 0, angVel = 0;
+const HFOV_DESIGN = null;   // computed from Blender's camera (9:16 vertical fit)
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+// ---- loading progress bar: approximate size of each file (KB) ----
+const barFill = document.getElementById('bar-fill');
+const WEIGHTS = { env: 395, glb: 2620, emission: 19, lut: 432, lutjs: 1, data: 905, watch: 892, liningB: 19, liningT: 18, ao: 221 };
+const got = {}, weightTotal = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
+function showProgress() {
+  let s = 0; for (const k in WEIGHTS) s += WEIGHTS[k] * (got[k] || 0);
+  if (barFill) barFill.style.transform = `scaleX(${(s / weightTotal).toFixed(3)})`;
+}
+const onProgress = k => e => { if (e && e.total) { got[k] = Math.min(0.99, e.loaded / e.total); showProgress(); } };
+const onDone = k => x => { got[k] = 1; showProgress(); return x; };
+const [hdr, gltf, seamMask, lutBin, lutInfo] = await Promise.all([
+  new RGBELoader().loadAsync(P.get('env') || 'env.hdr', onProgress('env')).then(onDone('env')),
+  new GLTFLoader().loadAsync('luxbox.glb', onProgress('glb')).then(onDone('glb')),
+  new THREE.TextureLoader().loadAsync('Box_Base_emission.png').then(onDone('emission')),
+  fetch('agx_lut.bin').then(r => r.arrayBuffer()).then(onDone('lut')),
+  fetch('agx_lut.json').then(r => r.json()).then(onDone('lutjs')),
+]);
+const lut = new THREE.Data3DTexture(new Uint8Array(lutBin), lutInfo.N, lutInfo.N, lutInfo.N);
+lut.format = THREE.RGBAFormat; lut.type = THREE.UnsignedByteType;
+lut.minFilter = lut.magFilter = THREE.LinearFilter;
+lut.wrapS = lut.wrapT = lut.wrapR = THREE.ClampToEdgeWrapping;
+lut.unpackAlignment = 1; lut.needsUpdate = true;
+hdr.mapping = THREE.EquirectangularReflectionMapping;
+scene.environment = pmrem.fromEquirectangular(hdr).texture;
+scene.environmentIntensity = SETTINGS.env;
+hdr.dispose();
+// the carousel is drawn with the same light as the sequence (real 3D wall, Blender's world):
+// the last frame of one part and the first of the other are identical
+
+scene.add(gltf.scene);
+circle = gltf.scene.getObjectByName('Circle');
+camera = gltf.cameras[0];
+q0 = circle.quaternion.clone();
+
+// Blender's lights: the glTF exporter turns watts into candela by multiplying by 683 (luminous efficacy)
+// and applies the exposure as well; three.js does not undo the 683, so we divide it out here.
+// The 8 interior lights (one inside each box) are left out of the carousel: with no shadows they would shine through the walls;
+// in Cycles they only show through the seam, which here is done by the emissive material. They come back in step 2, inside the open box.
+const INTERIORS = /^Point\.?(006|009|010|011|012|013|014|015)$/;
+const drop = [];
+gltf.scene.traverse(o => {
+  if (o.isLight) {
+    const objName = o.userData.name || o.name;
+    if (INTERIORS.test(objName)) { drop.push(o); return; }
+    o.intensity *= SETTINGS.light / 683; o.castShadow = false;
+    // the light comes from the environment; only Point.018 (small, next to the camera) stays direct: it makes the shine
+    // on the polished metal (clasp and logos), which covers less than a pixel in the environment map. ?lights=1 keeps them all
+    if (P.get('lights') !== '1' && !/^Point\.?018$/.test(objName)) drop.push(o);
+  }
+  if (o.isMesh) {
+    o.frustumCulled = true;
+    const m = o.material;
+    // the emissive icosphere in your scene only lights up while box .008 opens (off at 462): it is not used here
+    if (/^Icosphere/.test(o.userData.name || o.name)) o.visible = false;
+  }
+});
+drop.forEach(o => o.parent.remove(o));
+// the 3D wall is always drawn (carousel and sequence) and hides the boxes at the back of the ring, as in Cycles
+const wall = gltf.scene.getObjectByName('Wall_Frosted_Glass');
+if (wall) wall.traverse(o => { if (o.isMesh) { o.userData.matOriginal = o.material; o.renderOrder = -1; } });
+// seam: the silver profile glows from the interior light (in Cycles); here, an emissive mask
+seamMask.flipY = false; seamMask.colorSpace = THREE.NoColorSpace;
+SETTINGS.seam = parseFloat(P.get('seam') ?? 0.8);
+// The boxes are lit only by the environment map (captured in Cycles with the lights as spheres, calibrated).
+// The map is captured from a single point; these per-material factors line it up with the measurements from the Cycles render.
+// calibrated against the Cycles render of frame 1 (measurements in ref/): body 19.7, lid 25.3, clasp 114.8, logos 22.7
+const REFLECT_MATERIAL = Object.assign({ 'Box_Base': 1.83, 'Box_Lid': 1.4, 'Clasp_Polished_Steel.004': 6.5, 'Silver_Edge': 2.15 },
+                                      JSON.parse(P.get('rm') ?? '{}'));
+// (three.js ignores envMapIntensity when the environment is only on scene.environment: it is set per material)
+const texEnv = scene.environment;
+const matsEnv = new Set();   // the lights hang from Circle: the environment turns with the carousel
+gltf.scene.traverse(o => {
+  if (!o.isMesh || !o.material || !o.material.isMeshStandardMaterial) return;
+  o.material.envMap = texEnv;
+  const f = REFLECT_MATERIAL[o.material.name] ?? 1;
+  o.material.envMapIntensity = f * SETTINGS.env * parseFloat(P.get('env_' + o.material.name) ?? 1);
+  matsEnv.add(o.material);
+});
+gltf.scene.traverse(o => {
+  if (o.isMesh && o.material && o.material.name === 'Box_Base') {
+    o.material.emissive = new THREE.Color(1, 1, 1);
+    o.material.emissiveMap = seamMask;
+    o.material.emissiveIntensity = SETTINGS.seam;
+    o.material.needsUpdate = true;
+  }
+});
+
+// ---- reflecting floor: a Reflector plane just under the boxes, fading out ----
+const boxes = [];
+// GLTFLoader strips the dots from names ("MASTER_Base.001" -> "MASTER_Base001"); the original stays in userData.name
+gltf.scene.traverse(o => { if (/^MASTER_Base\.?\d{3}$/.test(o.userData.name || o.name)) boxes.push(o); });
+if (!boxes.length) throw new Error('Boxes not found in the GLB');
+const bb = new THREE.Box3(); boxes.forEach(c => bb.expandByObject(c));
+const floorY = bb.min.y + 0.002;
+const ringCenter = new THREE.Vector3(); circle.getWorldPosition(ringCenter);
+const mirror = new Reflector(new THREE.CircleGeometry(30, 64), {
+  textureWidth: 512, textureHeight: 512, clipBias: 0.003, color: 0xffffff,
+  shader: {
+    name: 'FloorReflect',
+    uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null },
+                strength: { value: SETTINGS.reflect }, compress: { value: parseFloat(P.get('reflect_light') ?? 1.5) }, center: { value: ringCenter }, radius: { value: parseFloat(P.get('reflect_radius') ?? 26.0) } },   // the reflection fades far from the ring, not under the boxes
+    vertexShader: `
+      uniform mat4 textureMatrix; varying vec4 vUv; varying vec3 vPos;
+      void main() { vUv = textureMatrix * vec4(position, 1.0);
+        vPos = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tDiffuse; uniform float strength, compress; uniform vec3 center; uniform float radius;
+      varying vec4 vUv; varying vec3 vPos;
+      void main() {
+        vec4 r = texture2DProj(tDiffuse, vUv);
+        r.rgb = r.rgb / (1.0 + r.rgb * compress);
+        float d = length(vPos.xz - center.xz) / radius;
+        float fade = strength * (1.0 - smoothstep(0.55, 1.0, d));
+        // only where a box is reflected (alpha of the reflection render); the background carries its own reflection
+        gl_FragColor = vec4(r.rgb, fade * r.a);
+      }`,
+  },
+});
+// the reflection is rendered without the background (which already includes the wall's reflection) and with alpha 0 where there is nothing
+const mirrorRenderOriginal = mirror.onBeforeRender;
+mirror.onBeforeRender = function (...a) {
+  const bg = scene.background, ca = renderer.getClearAlpha(), cc = renderer.getClearColor(new THREE.Color());
+  scene.background = null; renderer.setClearColor(0x000000, 0);
+  // the wall is kept out of the reflection: it is stuck to the camera and was cutting the reflection of the boxes behind
+  const withWall = P.get('wall_reflect') === '1';
+  if (wall && !withWall) wall.visible = false;
+  mirrorRenderOriginal.apply(this, a);
+  if (wall) wall.visible = true;
+  scene.background = bg; renderer.setClearColor(cc, ca);
+};
+mirror.material.transparent = true;
+mirror.material.depthWrite = false;
+mirror.rotation.x = -Math.PI / 2;
+mirror.position.set(ringCenter.x, floorY, ringCenter.z);
+mirror.renderOrder = 1;
+scene.add(mirror);
+
+// ---- post-processing: glow only on the very bright, and AgX at the end ----
+composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), SETTINGS.bloom, 0.45, parseFloat(P.get('threshold') ?? 0.92));
+// the glow used to switch on at once when it crossed the threshold: on a seam that shines a little more at one side, the pulse made
+// the light run along the edge (right to left on the first box). With a soft knee it grows and fades the same everywhere
+bloom.highPassUniforms.smoothWidth.value = parseFloat(P.get('knee') ?? 0.01);
+// The glow is computed at half resolution: the original hiPass averages 4 pixels and THEN applies the threshold.
+// A thin line like the seam, depending on how it falls between two rows of pixels, was watered down in stretches: along the edge
+// the pulse crossed the threshold at different moments and the light "ran" (on the first box, which falls between two rows).
+// Here the threshold is applied pixel by pixel and the average comes after: it no longer depends on where the line falls.
+if (P.get('glow_old') !== '1') {
+  bloom.highPassUniforms.texelIn = { value: new THREE.Vector2() };
+  bloom.materialHighPassFilter.fragmentShader = `
+    uniform sampler2D tDiffuse; uniform vec3 defaultColor; uniform float defaultOpacity;
+    uniform float luminosityThreshold; uniform float smoothWidth; uniform vec2 texelIn;
+    varying vec2 vUv;
+    vec4 hiPass(vec2 uv) {
+      vec4 t = texture2D(tDiffuse, uv);
+      float v = dot(t.rgb, vec3(0.2126729, 0.7151522, 0.0721750));
+      return mix(vec4(defaultColor.rgb, defaultOpacity), t, smoothstep(luminosityThreshold, luminosityThreshold + smoothWidth, v));
+    }
+    void main() {
+      vec2 d = 0.5 * texelIn;
+      gl_FragColor = 0.25 * (hiPass(vUv + vec2(-d.x, -d.y)) + hiPass(vUv + vec2(d.x, -d.y))
+                           + hiPass(vUv + vec2(-d.x, d.y)) + hiPass(vUv + vec2(d.x, d.y)));
+    }`;
+  bloom.materialHighPassFilter.needsUpdate = true;
+}
+composer.addPass(bloom);
+// Blender's AgX: log2 of the light -> 3D LUT generated with the same OCIO -> screen sRGB
+const passAgX = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, lut: { value: lut }, exposure: { value: SETTINGS.exp },
+              minEV: { value: lutInfo.minEV }, maxEV: { value: lutInfo.maxEV }, N: { value: lutInfo.N } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    precision highp sampler3D;
+    uniform sampler2D tDiffuse; uniform sampler3D lut;
+    uniform float exposure, minEV, maxEV, N; varying vec2 vUv;
+    float grain(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec3 c = max(texture2D(tDiffuse, vUv).rgb * exposure, vec3(0.0));
+      vec3 l = clamp((log2(max(c, vec3(1e-12))) - minEV) / (maxEV - minEV), 0.0, 1.0);
+      vec3 uvw = l * ((N - 1.0) / N) + 0.5 / N;
+      vec3 o = texture(lut, uvw).rgb;
+      o += (grain(gl_FragCoord.xy) - 0.5) / 255.0;      // no banding in the dark gradients
+      gl_FragColor = vec4(o, 1.0);
+    }`,
+});
+composer.addPass(passAgX);
+
+// ---- size: keeps the horizontal framing of the 9:16 design ----
+const vfov0 = camera.fov;                             // Blender's vertical fov (fit on the long side)
+const hfov0 = 2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(vfov0) / 2) * 9 / 16);
+function resize() {
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w, h, false); composer.setSize(w, h);
+  bloom.resolution.set(w / 2, h / 2);
+  if (bloom.highPassUniforms.texelIn) {
+    const pr = renderer.getPixelRatio();
+    bloom.highPassUniforms.texelIn.value.set(1 / (w * pr), 1 / (h * pr));
+  }
+  camera.aspect = w / h;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hfov0 / 2) / camera.aspect));
+  camera.updateProjectionMatrix();
+  // interface: 360 design pt = the screen width
+  document.getElementById('ui').style.setProperty('--u', (w / 360) + 'px');
+}
+addEventListener('resize', resize); resize();
+
+// ---- carousel: dragging turns the ring, on release it snaps, one box per gesture ----
+const axisY = new THREE.Vector3(0, 1, 0);
+const ENV_SIGN = parseFloat(P.get('se') ?? 1);
+function layout(a) {
+  circle.quaternion.copy(new THREE.Quaternion().setFromAxisAngle(axisY, a).multiply(q0));
+  for (const m of matsEnv) m.envMapRotation.set(0, ENV_SIGN * a, 0);
+}
+// direction: dragging left brings the box seen on the right to the center
+function rightSign() {
+  layout(angle + STEP); circle.updateMatrixWorld(true);
+  const v = new THREE.Vector3(); let best = null;
+  const probe = s => { layout(angle + s * STEP); circle.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+    // box that ends centred after turning s*STEP: it was on the right if it showed with x > 0 before
+    return s; };
+  layout(angle); circle.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+  let s = 1;
+  for (const c of boxes) {
+    c.getWorldPosition(v); v.project(camera);
+    if (v.z < 1 && Math.abs(v.y) < 1 && v.x > 0.3 && v.x < 1.6) {
+      // check which turn brings it to the center
+      layout(angle + STEP); circle.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+      const w = new THREE.Vector3(); c.getWorldPosition(w); w.project(camera);
+      s = Math.abs(w.x) < 0.2 ? 1 : -1; break;
+    }
+  }
+  layout(angle); circle.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+  return s;
+}
+const SIGN = rightSign();
+
+let drag = null;
+let state = 'rest';            // idle -> opening -> open (step 2b: sequence and detail) -> ... -> idle
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => {
+  if (intro) { intro = null; goal = Math.round(goal / STEP) * STEP; }
+  if (state !== 'rest') return;
+  el.setPointerCapture(e.pointerId);
+  drag = { x0: e.clientX, y0: e.clientY, a0: goal, t0: e.timeStamp, samples: [[e.timeStamp, e.clientX]] };
+});
+el.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const w = stage.clientWidth, dx = e.clientX - drag.x0;
+  const t = e.timeStamp;     // the event's own time, not the time it gets processed (reliable even when the frame rate drops)
+  drag.samples.push([t, e.clientX]);
+  while (drag.samples.length > 2 && t - drag.samples[0][0] > 100) drag.samples.shift();
+  // one screen width ~ 1.4 boxes; capped at one box per gesture (with some resistance)
+  // the boxes follow the finger (DIR = -1 flips it back)
+  let d = DIR * SIGN * (dx / w) * STEP * 1.4;
+  const lim = STEP * 1.08;
+  if (Math.abs(d) > STEP) d = Math.sign(d) * (STEP + (Math.abs(d) - STEP) * 0.25);
+  d = THREE.MathUtils.clamp(d, -lim, lim);
+  goal = drag.a0 + d; angle = goal;
+});
+function release(e) {
+  if (!drag) return;
+  // a tap (no drag): on the center box it opens it; on a side box it brings that one to the center
+  if (e && e.type === 'pointerup' && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 8 && e.timeStamp - drag.t0 < 450) {
+    goal = drag.a0; angle = goal; drag = null;
+    tapBox(e); return;
+  }
+  const d = goal - drag.a0;
+  // finger speed over the last ~100 ms (px/ms): a quick flick changes box even if it is short
+  const m = drag.samples, a = m[0], b = m[m.length - 1];
+  const vx = (b[1] - a[1]) / Math.max(16, b[0] - a[0]);
+  const fast = Math.abs(vx) > 0.35;
+  window.__lastGesture = { vx, d: d / STEP, samples: m.length, dt: b[0] - a[0] };
+  let step = 0;
+  if (Math.abs(d) > STEP * 0.28 || (fast && Math.abs(d) > STEP * 0.04)) step = Math.sign(d || DIR * SIGN * vx);
+  goal = drag.a0 + step * STEP;
+  drag = null;
+}
+el.addEventListener('pointerup', release); el.addEventListener('pointercancel', release);
+
+// ---- tapping the boxes ----
+const ray = new THREE.Raycaster();
+function boxOf(obj) { while (obj && !boxes.includes(obj)) obj = obj.parent; return obj; }
+function tapBox(e) {
+  const r = el.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = ray.intersectObjects(boxes, true).find(h => h.object.visible);
+  if (!hit) return;
+  const c = boxOf(hit.object);
+  const v = new THREE.Vector3(); c.getWorldPosition(v); v.project(camera);
+  if (Math.abs(v.x) < 0.25) open({ byTap: true });           // the center one: it opens
+  else goal += (v.x > 0 ? -SIGN : SIGN) * STEP;           // a side one: it comes to the center
+}
+
+// ---- bottom swiper: dragging the knob to the right = ON ----
+const SW = { travel: 202.67, word: -76.72, knobCenter: 47.33 };           // pt: knob left -> right (knob centred in the pill), and how far the word slides
+const imKnob = document.getElementById('swipe-knob'), imWord = document.getElementById('swipe-word');
+const imKnobOn = document.getElementById('swipe-knob-on'), imPillOn = document.getElementById('swipe-pill-on');
+const imArrowGlow = document.getElementById('swipe-arrow-glow');
+const knobZone = document.getElementById('knob-zone');
+let swipeProgress = 0;
+function setSwipe(p) {
+  swipeProgress = p;
+  const u = 'var(--u)';
+  const tb = `translateX(calc(${(p * SW.travel).toFixed(3)} * ${u}))`;
+  imKnob.style.transform = tb; knobZone.style.transform = tb; imKnobOn.style.transform = tb; imArrowGlow.style.transform = tb;
+  // the swiper's light grows and fades with the knob (rims and arrow, as in your animation)
+  const on = p * p * (3 - 2 * p); imKnobOn.style.opacity = on; imPillOn.style.opacity = on; imArrowGlow.style.opacity = on;
+  // the word starts sliding a little before the knob gets there, as in your animation (290 -> 345)
+  const tp = Math.min(1, p * 1.1) * SW.word;
+  imWord.style.transform = `translateX(calc(${tp.toFixed(3)} * ${u}))`;
+  // wipe: the text goes into the knob but does not come out (whatever has passed the knob's center disappears)
+  const cut = SW.knobCenter + p * SW.travel - tp;      // knob center, in the text's coordinates (pt)
+  imWord.style.clipPath = `inset(0 0 0 calc(${cut.toFixed(3)} * ${u}))`;
+}
+function tween(from, a, ms, fn, curve = t => 1 - Math.pow(1 - t, 3)) {
+  return new Promise(res => {
+    const t0 = performance.now();
+    const step = t => { const k = Math.min(1, (t - t0) / ms); fn(from + (a - from) * curve(k)); k < 1 ? requestAnimationFrame(step) : res(); };
+    requestAnimationFrame(step);
+  });
+}
+let knobDrag = null;
+knobZone.addEventListener('pointerdown', e => {
+  if (state !== 'rest') return;
+  knobZone.setPointerCapture(e.pointerId); knobZone.style.cursor = 'grabbing';
+  knobDrag = { x0: e.clientX, p0: swipeProgress };
+});
+knobZone.addEventListener('pointermove', e => {
+  if (!knobDrag) return;
+  const u = stage.clientWidth / 360;
+  setSwipe(THREE.MathUtils.clamp(knobDrag.p0 + (e.clientX - knobDrag.x0) / (SW.travel * u), 0, 1));
+});
+const releaseKnob = () => {
+  if (!knobDrag) return;
+  knobDrag = null; knobZone.style.cursor = 'grab';
+  if (swipeProgress > 0.55) open({ byTap: false });
+  else tween(swipeProgress, 0, 250, setSwipe);
+};
+knobZone.addEventListener('pointerup', releaseKnob); knobZone.addEventListener('pointercancel', releaseKnob);
+
+// ---- opening: two ways (tap the box or the swiper), same result ----
+const gHeader = document.getElementById('group-header'), gRec = document.getElementById('group-recents'), gBottom = document.getElementById('bottom');
+async function open({ byTap }) {
+  if (state !== 'rest') return;
+  state = 'opening';
+  const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  // the knob reaches the right end (in your timeline: 294 -> 338, 0.88 s)
+  const knob = tween(swipeProgress, 1, (byTap ? 880 : 200) / SPEED, setSwipe, easeInOut);
+  if (byTap) {
+    // tap on the box: a "pop" (zoom in / zoom out) and then it moves 2% closer to the camera
+    const c = centredBox();
+    if (c) {
+      const bp = c.getWorldPosition(new THREE.Vector3()), cp = camera.getWorldPosition(new THREE.Vector3());
+      const dest = bp.clone().lerp(cp, CLOSER);
+      const off = c.parent.worldToLocal(dest.clone()).sub(c.parent.worldToLocal(bp.clone()));
+      closerK = { box: c, pos0: c.position.clone(), s0: c.scale.clone(), off, offWorld: dest.sub(bp) };
+      await tween(0, 1, 300 / SPEED, k => c.scale.copy(closerK.s0).multiplyScalar(1 + POP * Math.sin(Math.PI * k)), t => t);
+      await tween(0, 1, 560 / SPEED, setCloser, easeInOut);
+    }
+  }
+  await knob;
+  // ON: header and recents fade out (338 -> 363, 0.5 s); the swiper drops and leaves (367 -> 416, 1 s)
+  gHeader.classList.add('hidden'); gRec.classList.add('hidden');
+  startSequence();
+}
+// ---- recents: endless strip, dragged with the finger and carried on by inertia ----
+const cards = [...document.querySelectorAll('#group-recents .card')];
+const recZone = document.getElementById('recents-zone');
+const REC = { x0: -32.32, step: 111.6 };                        // pt: first card and distance between cards
+let recOff = 0, recVel = 0, recDrag = null;
+function setRecents() {
+  const total = cards.length * REC.step, start = REC.x0 - REC.step;
+  cards.forEach((t, i) => {
+    const x = ((REC.x0 + i * REC.step + recOff - start) % total + total) % total + start;
+    t.style.setProperty('--x', x.toFixed(2));
+  });
+}
+recZone.addEventListener('pointerdown', e => {
+  recZone.setPointerCapture(e.pointerId); recZone.style.cursor = 'grabbing';
+  recDrag = { x0: e.clientX, off0: recOff, samples: [[e.timeStamp, e.clientX]] }; recVel = 0;
+});
+recZone.addEventListener('pointermove', e => {
+  if (!recDrag) return;
+  const u = stage.clientWidth / 360;
+  recOff = recDrag.off0 + (e.clientX - recDrag.x0) / u; setRecents();
+  recDrag.samples.push([e.timeStamp, e.clientX]);
+  while (recDrag.samples.length > 2 && e.timeStamp - recDrag.samples[0][0] > 100) recDrag.samples.shift();
+});
+const releaseRec = () => {
+  if (!recDrag) return;
+  const m = recDrag.samples, a = m[0], b = m[m.length - 1], u = stage.clientWidth / 360;
+  recVel = (b[1] - a[1]) / u / Math.max(16, b[0] - a[0]) * 1000;   // pt/s
+  recDrag = null; recZone.style.cursor = 'grab';
+};
+recZone.addEventListener('pointerup', releaseRec); recZone.addEventListener('pointercancel', releaseRec);
+function recentsInertia(dt) {
+  if (recDrag || Math.abs(recVel) < 2) return;
+  recOff += recVel * dt; recVel *= Math.exp(-3.2 * dt); setRecents();
+}
+
+// the tapped box's step closer: it undoes itself while the camera moves in (470 -> 600), before it opens
+const POP = parseFloat(P.get('pop') ?? 0.05), CLOSER = parseFloat(P.get('closer') ?? 0.02);
+let closerK = null;
+function setCloser(k) {
+  if (!closerK) return;
+  closerK.k = k; closerK.box.position.copy(closerK.pos0).addScaledVector(closerK.off, k);
+}
+
+// =====================================================================================
+// VERSION B: the whole sequence in real time. The data from your timeline (camera, circle,
+// lid, watch, interior light and lining) is played back relative to the centred box.
+// =====================================================================================
+const eBack = document.getElementById('back'), eInfo = document.getElementById('info'), eCont = document.getElementById('continueBtn');
+// per-user data (by URL in the prototype; in the app it will come from their own data)
+for (const [id, key] of [['info-model', 'model'], ['info-price', 'price']])
+  if (P.get(key)) document.getElementById(id).textContent = P.get(key);
+const [data, watchPhoto, mLiningBase, mLiningLid, wallAO] = await Promise.all([
+  fetch('seq/data.json').then(r => r.json()).then(onDone('data')),
+  new THREE.TextureLoader().loadAsync(P.get('watch') || 'watch/watch-front.png').then(onDone('watch')),
+  new THREE.TextureLoader().loadAsync('Box_Base_lining.png').then(onDone('liningB')),
+  new THREE.TextureLoader().loadAsync('Box_Lid_lining.png').then(onDone('liningT')),
+  new THREE.TextureLoader().loadAsync('Wall_ao.png').then(onDone('ao')),
+]);
+watchPhoto.colorSpace = THREE.SRGBColorSpace; watchPhoto.wrapS = watchPhoto.wrapT = THREE.ClampToEdgeWrapping;
+// alpha premultiplied on upload: filtering no longer mixes in the white of the transparent pixels (it made a white outline)
+watchPhoto.premultiplyAlpha = true;
+for (const t of [mLiningBase, mLiningLid]) { t.flipY = false; t.colorSpace = THREE.NoColorSpace; }
+const FPS = data.fps, F0 = data.f0, F1 = data.f1, WAIT = data.wait;
+const dataAt = f => data.frames[THREE.MathUtils.clamp(Math.round(f) - F0, 0, data.frames.length - 1)];
+const INNER_LIGHT = parseFloat(P.get('inner_light') ?? 1.0);   // interior light calibration (watts -> three.js)
+
+// lining (Material.013): it darkens and loses its sheen as in your timeline; material shared by the 8 boxes
+const uLining = { value: 1 }, uLiningSpec = { value: 1 };
+// in Cycles the interior light is a large sphere (radius 0.56) and fills the inside of the lid; a point light leaves it grey
+const uLiningLid = { value: parseFloat(P.get('lid_inner') ?? 1.0) }, uLiningBase = { value: 1 };
+function injectLining(mat, mask) {
+  mat.userData.uDirect = { value: 1 };       // direct light it receives (the open box loses it in the detail view)
+  const uLiningLight = mask === mLiningLid ? uLiningLid : uLiningBase;
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.liningMask = { value: mask }; sh.uniforms.uLining = uLining; sh.uniforms.uLiningSpec = uLiningSpec;
+    sh.uniforms.uDirect = mat.userData.uDirect; sh.uniforms.uLiningLight = uLiningLight;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform sampler2D liningMask; uniform float uLining, uLiningSpec, uDirect, uLiningLight;')
+      .replace('#include <map_fragment>', '#include <map_fragment>\n  float mLining = texture2D(liningMask, vMapUv).r;\n  diffuseColor.rgb *= mix(1.0, uLining, mLining);')
+      .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n  reflectedLight.directSpecular *= mix(1.0, uLiningSpec, mLining);\n  reflectedLight.indirectSpecular *= mix(1.0, uLiningSpec, mLining);\n  reflectedLight.directDiffuse *= uDirect * mix(1.0, uLiningLight, mLining); reflectedLight.directSpecular *= uDirect;');
+  };
+  mat.needsUpdate = true;
+}
+let matBaseShared = null, matLid = null;
+gltf.scene.traverse(o => { if (o.isMesh && o.material) {
+  if (o.material.name === 'Box_Base') matBaseShared = o.material;
+  if (o.material.name === 'Box_Lid') matLid = o.material;
+} });
+injectLining(matLid, mLiningLid);
+// each box with its own copy of the base material (textures shared): the front box's seam glows on its own
+const matBaseOf = new Map();
+for (const c of boxes) {
+  const m = matBaseShared.clone(); injectLining(m, mLiningBase); matsEnv.add(m);
+  c.traverse(o => { if (o.isMesh && o.material === matBaseShared) o.material = m; });
+  matBaseOf.set(c, m);
+}
+let matBase = matBaseOf.get(boxes[0]);
+// each box with its own copy of every material (textures shared): that way each one can be faded separately
+const matsOf = new Map();
+for (const c of boxes) {
+  const own = new Map(), list = [matBaseOf.get(c)];
+  c.traverse(o => { if (!o.isMesh || !o.material || o.material === matBaseOf.get(c)) return;
+    if (!own.has(o.material)) {
+      const k = o.material.clone(); if (o.material === matLid) injectLining(k, mLiningLid);
+      if (matsEnv.has(o.material)) matsEnv.add(k);
+      own.set(o.material, k); list.push(k);
+    }
+    o.material = own.get(o.material); });
+  matsOf.set(c, list);
+  for (const m of list) m.userData.env0 = m.envMapIntensity;
+}
+// ---- light from the front box onto the side ones (light linking done by hand, as in Blender) ----
+// The interior light (with shadows) only lights its own box: the light escaping through the gap went up, touched only
+// the side boxes' lids and was different on each side. The side boxes get this light instead, with no shadows and from
+// the center of the front box: whole (lid and base) and the same on both sides. It grows with the knob and, in the
+// sequence, follows the lid opening in your timeline (it opens 350 -> 550, it closes 1025 -> 1350).
+// calibrated: with the knob at the end, the side boxes match the lid you marked (44.6); the base (darker material) gets a factor
+const SPILL_KNOB = parseFloat(P.get('spill') ?? 3.2), SPILL_BASE = parseFloat(P.get('spill_base') ?? 1.4);
+// on the way back the open box moves aside while closing: its light falls on its neighbours (up to two slots away) and fades with
+// the lid (1250: 35 degrees, 1300: 12, 1350: closed); at most, the power of the interior light (742.9 W / 4 pi)
+const SPILL_LID = parseFloat(P.get('spill_lid') ?? 256), SPILL_BACK_MAX = parseFloat(P.get('spill_back') ?? 59);
+const SPILL_REACH = parseFloat(P.get('spill_reach') ?? 6.5), SPILL_REACH_BACK = parseFloat(P.get('spill_reach_back') ?? 12);
+const spillPos = new THREE.Vector3();
+const SPILL_LIGHTS = (() => {
+  const shadowLine = '\t\tpointLightShadow = pointLightShadows[ i ];\n';
+  const t = THREE.ShaderChunk.lights_fragment_begin;
+  if (!t.includes(shadowLine)) console.error('lights_fragment_begin: no shadow-casting light found (three.js change?)');
+  // the only point light casting shadows is the interior one: each box decides whether it receives it (spillInnerLight)
+  return t.replace(shadowLine, shadowLine + '\t\tdirectLight.color *= spillInnerLight;\n') + `
+  if ( spillInt > 0.0 ) {
+    vec3 spillL = ( viewMatrix * vec4( spillPos, 1.0 ) ).xyz - geometryPosition;
+    float spillD = length( spillL );
+    IncidentLight spillLight;
+    spillLight.direction = spillL / spillD;
+    spillLight.color = vec3( spillInt * spillMat * getDistanceAttenuation( spillD, spillReach, 2.0 ) );
+    spillLight.visible = true;
+    RE_Direct( spillLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );
+  }
+`;
+})();
+const uSpill = new Map(), boxCenter = new Map();
+for (const c of boxes) {
+  const u = { spillPos: { value: spillPos }, spillInt: { value: 0 }, spillReach: { value: SPILL_REACH }, spillInnerLight: { value: 1 } };
+  uSpill.set(c, u);
+  c.updateMatrixWorld(true);
+  boxCenter.set(c, c.worldToLocal(new THREE.Box3().setFromObject(c).getCenter(new THREE.Vector3())));
+  for (const m of matsOf.get(c)) {
+    if (!m.isMeshStandardMaterial) continue;
+    const prev = m.onBeforeCompile, key = prev.toString(), spillMat = { value: m === matBaseOf.get(c) ? SPILL_BASE : 1 };
+    m.onBeforeCompile = (sh, r) => {
+      prev.call(m, sh, r);
+      Object.assign(sh.uniforms, u); sh.uniforms.spillMat = spillMat;
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform vec3 spillPos; uniform float spillInt, spillReach, spillInnerLight, spillMat;')
+        .replace('#include <lights_fragment_begin>', SPILL_LIGHTS);
+    };
+    m.customProgramCacheKey = () => key + '|spill';
+    m.needsUpdate = true;
+  }
+}
+// front: the box giving off light (null: none); spill: the intensity the others receive
+function setSpill(front, spill, reach = SPILL_REACH) {
+  if (front) front.localToWorld(spillPos.copy(boxCenter.get(front)));
+  for (const [c, u] of uSpill) { u.spillInnerLight.value = c === front ? 1 : 0; u.spillInt.value = front && c !== front ? spill : 0; u.spillReach.value = reach; }
+}
+let spillSeq0 = 0;
+function setBoxOpacity(c, a) {
+  c.visible = a > 0.004;
+  const t = a < 0.999;
+  for (const m of matsOf.get(c)) {
+    if (m.transparent !== t) { m.transparent = t; m.needsUpdate = true; }
+    m.opacity = a; m.depthWrite = !t || a > 0.6;
+  }
+}
+// the swiper knob works as a dimmer: the further right, the more light on the front box (at rest it already glows a little)
+const BRIGHT_MAX = parseFloat(P.get('bright') ?? 4.5);   // maximum light at the end of the knob's travel
+// at rest the front box "breathes": a soft pulse (sine, ease-in-out) that fades as the knob advances
+const PULSE_AMP = parseFloat(P.get('pulse') ?? 1.2), PULSE_T = parseFloat(P.get('pulse_t') ?? 2.4);
+const smooth = x => { x = THREE.MathUtils.clamp(x, 0, 1); return x * x * (3 - 2 * x); };
+let pulseHold = null;   // tests: pulse phase held fixed (0..1)
+const knobLight = (p, t) => 1 + (BRIGHT_MAX - 1) * smooth(p) + PULSE_AMP * (1 - smooth(p)) * (pulseHold ?? (0.5 - 0.5 * Math.cos(2 * Math.PI * t / PULSE_T)));
+let boostSeq = 1, frontLight = 1;
+const vWeight = new THREE.Vector3(), cWeight = new THREE.Vector3();
+function updateBrightness(t) {
+  frontLight = knobLight(swipeProgress, t / 1000);
+  // each box's weight by how centred it is (and only those in the front row): while turning, the light moves
+  // from one box to the next with a soft fade, not in one step
+  camera.getWorldPosition(cWeight);
+  const dCenter = ringCenter.distanceTo(cWeight);
+  for (const [c, m] of matBaseOf) {
+    c.getWorldPosition(vWeight); const dist = vWeight.distanceTo(cWeight); vWeight.project(camera);
+    const weight = (dist < dCenter && vWeight.z < 1) ? 1 - smooth((Math.abs(vWeight.x) - 0.08) / 0.5) : 0;
+    // only the front box lights its seam: on the side boxes, thin and far away, it came out as a line of dots (and only on
+    // the left, because the mask has a gap on the other side). While turning, the light moves from one box to the next
+    m.emissiveIntensity = SETTINGS.seam * (P.get('seam_sides') === '1' ? 1 + (frontLight - 1) * weight : frontLight * weight);
+  }
+}
+
+// watch: Blender's plane with the same maths as your Watch_Silhouette material (silhouette and reveal)
+const watchGeo = new THREE.BufferGeometry();
+{ const face = data.watch_faces[0], pos = [], uv = [], idx = [];
+  face.forEach((vi, k) => { pos.push(...data.watch_mesh[vi]); uv.push(...data.watch_uv[k]); });
+  for (let i = 1; i < face.length - 1; i++) idx.push(0, i, i + 1);
+  watchGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  watchGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); watchGeo.setIndex(idx); }
+const watchMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  uniforms: { photo: { value: watchPhoto }, reveal: { value: 0 }, appear: { value: 0 },
+              radius: { value: 0 }, silhouette: { value: new THREE.Color().fromArray(data.silhouette_color) }, brightness: { value: data.brightness } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D photo; uniform float reveal, appear, radius, brightness; uniform vec3 silhouette; varying vec2 vUv;
+    vec4 pick(vec2 p){ if (any(lessThan(p, vec2(0.0))) || any(greaterThan(p, vec2(1.0)))) return vec4(0.0);
+      // the cut-out photo carries a light fringe (its original white background): the edge alpha is choked
+      vec4 t = texture2D(photo, p); float a = smoothstep(0.35, 1.0, t.a); return t * (a / max(t.a, 1e-4)); }
+    void main(){
+      vec4 s = pick(vUv);
+      for (int i = 0; i < 8; i++) { float a = float(i) * 0.785398;
+        vec2 d = vec2(cos(a), sin(a)) * radius;
+        s += pick(vUv + d * 0.5) + pick(vUv + d); }
+      s /= 17.0;
+      vec3 col = s.a > 0.0001 ? s.rgb / s.a : vec3(0.0);
+      col = mix(silhouette, col, reveal) * brightness;
+      gl_FragColor = vec4(col, s.a * appear * mix(0.78, 1.0, reveal));
+    }`,
+});
+const watch = new THREE.Mesh(watchGeo, watchMat); watch.matrixAutoUpdate = false; watch.visible = false; scene.add(watch);
+
+// interior light of the open box: real, with shadows (it only escapes through the open lid, as in Cycles)
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const innerLight = new THREE.PointLight(0xffffff, 0, 0, 2);
+innerLight.castShadow = true; innerLight.shadow.mapSize.set(512, 512); innerLight.shadow.bias = parseFloat(P.get("sb") ?? 0); innerLight.shadow.normalBias = parseFloat(P.get("snb") ?? 0.02); innerLight.shadow.camera.near = 0.02;
+// (with a negative bias the interior light leaked through the logos and made them glow)
+// the shadow (6 renders of the scene) is only recomputed when the lid moves: everything else is fixed relative to the light
+innerLight.shadow.autoUpdate = false;
+innerLight.visible = false; scene.add(innerLight);
+gltf.scene.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+// the lid does not receive the interior light's shadow: in Cycles the light is a large sphere and the back wall of the base
+// barely shades the inside of the lid; with a point light it made a grey band there. (The outer face of the lid
+// faces outward and this light does not reach it anyway.)
+if (P.get('lid_shadow') !== '1') gltf.scene.traverse(o => { if (o.isMesh && /^MASTER_Lid/.test(o.userData.name || o.name)) o.receiveShadow = false; });
+
+// real wall (in the sequence the camera moves relative to the wall and the fixed backdrop no longer works)
+const segments = [];
+if (wall) wall.traverse(o => { if (o.isMesh) segments.push(o); });
+// In your scene the wall is EXCLUDED from every light (light linking): it only sees the world (0.004 x 5.7).
+// three.js has no light linking: the wall gets its direct light removed and a uniform environment from the world.
+const ENV_WALL = parseFloat(P.get('env_wall') ?? 1.0);
+const worldScene = new THREE.Scene(); worldScene.background = new THREE.Color(0.0228, 0.0228, 0.0228);
+const worldEnv = pmrem.fromScene(worldScene).texture;
+for (const s of segments) {
+  const m = s.userData.matOriginal;
+  if (!m) continue;
+  m.envMap = worldEnv; m.envMapIntensity = ENV_WALL;
+  // the wall's baked AO carries the boxes' contact shadows where they sat in Blender; the wall turns with
+  // the camera, so those shadows stayed still on screen (dark patches under and behind the boxes)
+  // depth in the background: the wall's AO with the boxes, blurred until none of their shape is left (tools/blur_wall_ao.py)
+  if (P.get('wall_ao') !== '1') {
+    if (m.aoMap) { wallAO.channel = m.aoMap.channel; }
+    wallAO.flipY = false; wallAO.colorSpace = THREE.NoColorSpace; m.aoMap = wallAO; m.needsUpdate = true;
+  }
+  // in Cycles the wall is frosted glass: the back row of boxes shows through it. Here it is opaque and the
+  // curve of the floor was cutting them (and their reflection): it is drawn as background, hiding nothing
+  if (P.get('wall_occludes') !== '1') m.depthWrite = false;
+  m.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>',
+      '#include <lights_fragment_end>\n  reflectedLight.directDiffuse = vec3(0.0);\n  reflectedLight.directSpecular = vec3(0.0);');
+  };
+  m.needsUpdate = true;
+}
+
+// carousel angle that centres box .008 (the one the data comes from); the sequence ends with .001 centred (angle 0)
+const A8 = (() => {
+  const c8 = boxes.find(c => /008$/.test(c.userData.name || c.name)); const v = new THREE.Vector3();
+  let best = 0, dist = 9;
+  for (const a of [STEP, -STEP]) { layout(a); circle.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+    c8.getWorldPosition(v); v.project(camera); if (Math.abs(v.x) < dist) { dist = Math.abs(v.x); best = a; } }
+  layout(angle); return best;
+})();
+
+const base8inv = new THREE.Matrix4().fromArray(data.base8).invert();
+const Mk = new THREE.Matrix4(), tmp = new THREE.Matrix4();
+const camSeq = new THREE.PerspectiveCamera(camera.fov, camera.aspect, 0.05, 200); camSeq.matrixAutoUpdate = false;
+let boxK = null, lidK = null, lidParts = [], mode = 'carousel', seqFrame = F0, tSeq0 = 0, fSeq0 = F0, fSeqEnd = WAIT, swiperBack = false, swiperGone = false, fCur = F0;
+const seqSpeed = f => f < WAIT ? SPEED_OPEN * (1 + PUSH * (1 - smooth((f - F0) / (620 - F0)))) : SPEED;
+const q0inv = q0.clone().invert(), qTmp = new THREE.Quaternion(), vTmp = new THREE.Vector3(), sTmp = new THREE.Vector3();
+// ---- lid: the active box has its lid detached (with the logo and the tab) so it can be moved ----
+let openK = null;
+function holdBox(c) {
+  if (openK && openK.box === c) return openK;
+  releaseBox();
+  let lid = null; c.traverse(o => { if (!lid && /^MASTER_Lid/.test(o.userData.name || o.name)) lid = o; });
+  const rest = lid.matrix.clone();
+  // on every box but .008, the lid's logo and tab hang from the base: they get attached to the lid
+  const parts = [];
+  c.traverse(o => { if (o !== lid && /Logo_?lid|Clasp_tab/i.test(o.userData.name || o.name)) {
+    let insideLid = false; for (let q = o.parent; q; q = q.parent) if (q === lid) insideLid = true;
+    if (!insideLid) parts.push(o); } });
+  c.updateMatrixWorld(true);
+  for (const o of parts) { o.userData.restParent = o.parent; lid.attach(o); }
+  lid.matrixAutoUpdate = false;
+  return (openK = { box: c, lid, rest, parts });
+}
+function releaseBox() {
+  if (!openK) return;
+  const { box, lid, rest, parts } = openK;
+  lid.matrix.copy(rest); lid.matrixAutoUpdate = true; box.updateMatrixWorld(true);
+  for (const o of parts) o.userData.restParent.attach(o);
+  openK = null;
+}
+// the lid from your timeline: closed (290) and fully open; opening angle for every frame
+const lidClosed = new THREE.Matrix4().multiplyMatrices(base8inv, new THREE.Matrix4().fromArray(dataAt(F0).lid));
+const qClosed = new THREE.Quaternion().setFromRotationMatrix(lidClosed);
+const lidAngle = data.frames.map(fr => {
+  const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().multiplyMatrices(base8inv, new THREE.Matrix4().fromArray(fr.lid)));
+  return q.angleTo(qClosed);
+});
+let iOpen = 0; lidAngle.forEach((a, i) => { if (data.frames[i].f < WAIT && a > lidAngle[iOpen]) iOpen = i; });
+const OPEN_ANGLE = lidAngle[iOpen];
+// the swiper knob cracks the lid open: KNOB_OPEN = fraction of the timeline's opening (0.01 = 1%)
+const KNOB_OPEN = parseFloat(P.get('lid') ?? 0.005);
+// the lid's movement relative to the base (hinge), frame by frame: H(f) = lid(f) x closed^-1. It is multiplied by the
+// resting lid of each box (each sits a little differently, and otherwise the lid sank and covered the tab)
+const closedInv = lidClosed.clone().invert();
+const lidMove = i => new THREE.Matrix4().multiplyMatrices(base8inv, new THREE.Matrix4().fromArray(data.frames[i].lid)).multiply(closedInv);
+// lid cracked open by an angle a: following the timeline's real path (the hinge's arc, not the chord)
+function lidPose(a, out, rest) {
+  let i = 1; while (i < iOpen && lidAngle[i] < a) i++;
+  const a0 = lidAngle[i - 1], a1 = lidAngle[i], t = a1 > a0 ? THREE.MathUtils.clamp((a - a0) / (a1 - a0), 0, 1) : 1;
+  const H0 = lidMove(i - 1), H1 = lidMove(i);
+  const step = H1.clone().multiply(H0.clone().invert());
+  return out.multiplyMatrices(partial(step, t, new THREE.Matrix4()).multiply(H0), rest);
+}
+function centredBox() {
+  // the front one: centred on screen and the closest (the box on the opposite side of the ring falls on the same line)
+  const v = new THREE.Vector3(), cp = new THREE.Vector3(); camera.getWorldPosition(cp);
+  let best = null, score = Infinity;
+  for (const c of boxes) {
+    c.getWorldPosition(v); const d = v.distanceTo(cp); v.project(camera);
+    if (v.z >= 1 || Math.abs(v.x) > 0.35) continue;
+    if (d < score) { score = d; best = c; }
+  }
+  return best;
+}
+// bridge between carousel and sequence: the carousel's camera (and ring) do not line up exactly with those of the
+// box-relative timeline (the ring is not perfectly regular). A correction that fades out on its own joins them:
+// at the start (290 -> 470, before anything moves) and at the end (1250 -> 1400, back to the carousel).
+const corrCam0 = new THREE.Matrix4(), corrCam1 = new THREE.Matrix4(), corrRing1 = new THREE.Matrix4();
+const cpA = new THREE.Vector3(), cpQ = new THREE.Quaternion(), cpS = new THREE.Vector3(), cpU = new THREE.Vector3(1, 1, 1);
+function partial(E, k, out) {           // E "raised to k" (0 = identity, 1 = E): position, rotation and scale interpolated
+  E.decompose(cpA, cpQ, cpS);
+  return out.compose(cpA.multiplyScalar(k), new THREE.Quaternion().slerp(cpQ, k), cpU.set(1, 1, 1).lerp(cpS, k));
+}
+const tmpC = new THREE.Matrix4(), tmpP = new THREE.Matrix4();
+// peak of the timeline's light during the opening: until then the light never drops below the brightness the knob gave
+let F_PEAK = F0; for (const fr of data.frames) if (fr.f < WAIT && fr.light_w > dataAt(F_PEAK).light_w) F_PEAK = fr.f;
+const smax = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.max(a, b) + h * h * k / 4; };
+let shadowSig = '', knobAngleSeq = 0, restK = new THREE.Matrix4();
+// reach of the interior light (cutoff): at rest only its own box; with the knob it grows and the side boxes light up little by little
+const LIGHT_REACH = parseFloat(P.get('reach') ?? 3), REACH_MAX = parseFloat(P.get('reach_max') ?? 3.6);
+const knobReach = p => LIGHT_REACH + (REACH_MAX - LIGHT_REACH) * smooth(p);
+let seqReach = LIGHT_REACH;
+function applyFrame(f) {
+  seqFrame = f; const d = dataAt(f);
+  const opening = f < WAIT;
+  const k0 = opening ? 1 - smooth((f - F0) / (470 - F0)) : 0;
+  const k1 = opening ? 0 : smooth((f - 1250) / (F1 - 1250));
+  tmpC.multiplyMatrices(Mk, tmp.fromArray(d.cam));
+  if (k0 > 0) tmpC.premultiply(partial(corrCam0, k0, tmpP));
+  if (k1 > 0) tmpC.premultiply(partial(corrCam1, k1, tmpP));
+  camSeq.matrixWorld.copy(tmpC); camSeq.matrix.copy(tmpC);
+  camSeq.matrixWorldInverse.copy(camSeq.matrixWorld).invert();
+  camSeq.fov = camera.fov; camSeq.aspect = camera.aspect; camSeq.updateProjectionMatrix();
+  circle.matrix.multiplyMatrices(Mk, tmp.fromArray(d.circle));
+  if (k1 > 0) circle.matrix.premultiply(partial(corrRing1, k1, tmpP));
+  lidK.matrix.multiplyMatrices(base8inv, tmp.fromArray(d.lid)).multiply(closedInv).multiply(restK);
+  if (opening && knobAngleSeq > 1e-5) {
+    const aLid2 = lidAngle[THREE.MathUtils.clamp(Math.round(f) - F0, 0, lidAngle.length - 1)];
+    if (aLid2 < knobAngleSeq * 1.3) lidPose(smax(aLid2, knobAngleSeq, 0.3 * knobAngleSeq), lidK.matrix, restK);
+  }
+  watch.matrix.multiplyMatrices(Mk, tmp.fromArray(d.watch));
+  innerLight.position.fromArray(d.light).applyMatrix4(Mk);
+  // tapped box: the step closer undoes itself while the camera moves in (470 -> 600)
+  if (closerK) {
+    const kA = opening ? 1 - smooth((f - 470) / 130) : 0;
+    setCloser(kA);
+    watch.matrix.premultiply(tmpP.makeTranslation(closerK.offWorld.x * kA, closerK.offWorld.y * kA, closerK.offWorld.z * kA));
+    innerLight.position.addScaledVector(closerK.offWorld, kA);
+  }
+  // light: it starts from the brightness the knob gave and joins yours smoothly once it goes past it (rising to the peak);
+  // after that, exactly the timeline's (in the detail view, almost off)
+  const floorW = 742.866 * boostSeq;
+  const wEff = (opening && f <= F_PEAK) ? smax(d.light_w, floorW, 0.3 * floorW) : d.light_w;
+  innerLight.intensity = wEff / (4 * Math.PI) * INNER_LIGHT;
+  // at the start the light only reaches its own box, as at the end of the carousel (the side ones do not light up all at once);
+  // the reach grows while the lid opens (470 -> 620) until it is unlimited, as in your scene
+  innerLight.distance = opening ? (f < 620 ? seqReach + 60 * smooth((f - 470) / 150) : 0)
+                            : (f > 1250 ? LIGHT_REACH + 60 * (1 - smooth((f - 1250) / 150)) : 0);   // on the way back it fades out little by little
+  uLining.value = d.lining; uLiningSpec.value = d.lining_spec / 0.5;
+  // the seam glows from the interior light leaking through the closed lid; with the lid open there is no gap any more
+  // (otherwise the base's rim stayed lit behind the watch in the detail view)
+  const aLid = lidAngle[THREE.MathUtils.clamp(Math.round(f) - F0, 0, lidAngle.length - 1)];
+  matBase.emissiveIntensity = SETTINGS.seam * wEff / 742.866 * (1 - smooth(aLid / 0.35));
+  const openness = aLid / OPEN_ANGLE;
+  // during the opening, the knob's (the side boxes fade out 470 -> 560); on the way back, according to the lid
+  if (opening) setSpill(boxK, spillSeq0);
+  else setSpill(boxK, Math.min(SPILL_LID * openness, SPILL_BACK_MAX), SPILL_REACH_BACK);
+  // while the watch is on screen, the open box loses its environment reflections (the base's rim stayed lit behind it)
+  const kEnv = P.get('edge') === '1' ? 1 : THREE.MathUtils.clamp(d.lining, 0, 1);   // same as the lining in your timeline (725 -> 755)
+  for (const m of matsOf.get(boxK)) { m.envMapIntensity = m.userData.env0 * kEnv; if (m.userData.uDirect) m.userData.uDirect.value = kEnv; }
+  const u = watchMat.uniforms; u.reveal.value = d.reveal; u.appear.value = d.appear;
+  u.radius.value = THREE.MathUtils.clamp(1 - d.reveal, 0, 1) * data.max_blur;
+  // the interior light's shadow is only recomputed if something has moved
+  boxK.updateMatrixWorld(true);
+  const sig = lidK.matrixWorld.elements.map(x => x.toFixed(4)).join() + innerLight.position.toArray().map(x => x.toFixed(4)).join();
+  if (sig !== shadowSig) { shadowSig = sig; innerLight.shadow.needsUpdate = true; }
+  // the environment (the lights) turns with the circle
+  circle.matrix.decompose(vTmp, qTmp, sTmp); qTmp.multiply(q0inv);
+  const yaw = 2 * Math.atan2(qTmp.y, qTmp.w);
+  for (const m of matsEnv) m.envMapRotation.set(0, ENV_SIGN * yaw, 0);
+  // interface driven by your curves (by ON, header and recents have already faded)
+  if (f > 363) { gHeader.style.opacity = d.UI_Header; gRec.style.opacity = d.UI_Recents; }
+  eBack.style.opacity = d.UI_Back; eInfo.style.opacity = d.UI_Info;
+  const active = state === 'detail';
+  eBack.style.pointerEvents = active && d.UI_Back > 0.5 ? 'auto' : 'none';
+  eCont.style.pointerEvents = active && d.UI_Info > 0.5 ? 'auto' : 'none';
+  if (opening && f >= 367 && !swiperGone) {
+    swiperGone = true;
+    gBottom.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(55%)', opacity: 0 }],
+                  { duration: (416 - 367) / FPS * 1000 / seqSpeed(390), easing: 'cubic-bezier(.5,0,.75,.4)', fill: 'forwards' });
+  }
+  // on the way back the swiper comes in again (1216 -> 1311), at rest and with the knob on the left
+  if (f >= 1216 && !swiperBack) {
+    swiperBack = true; setSwipe(0); gBottom.getAnimations().forEach(a => a.cancel());
+    gBottom.animate([{ transform: 'translateY(55%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }],
+                  { duration: (1311 - 1216) / FPS * 1000 / SPEED, easing: 'cubic-bezier(.25,.6,.3,1)', fill: 'forwards' });
+  }
+}
+function startSequence() {
+  state = 'sequence'; swiperBack = false;
+  boxK = centredBox();
+  matBase = matBaseOf.get(boxK); boostSeq = frontLight; seqReach = knobReach(swipeProgress); spillSeq0 = SPILL_KNOB * smooth(swipeProgress);
+  const held = holdBox(boxK); lidK = held.lid; lidParts = held.parts; restK = held.rest;
+  knobAngleSeq = KNOB_OPEN * OPEN_ANGLE * smooth(swipeProgress);
+  // the timeline is relative to the box at rest (without the tap's step closer)
+  if (closerK && closerK.box !== boxK) { setCloser(0); closerK.box.scale.copy(closerK.s0); closerK = null; }
+  if (closerK) { boxK.position.copy(closerK.pos0); boxK.scale.copy(closerK.s0); }
+  boxK.updateMatrixWorld(true);
+  Mk.multiplyMatrices(boxK.matrixWorld, base8inv);
+  if (closerK) setCloser(closerK.k ?? 1);
+  // entry correction: the carousel's camera against the one at frame 290
+  camera.updateMatrixWorld(true);
+  corrCam0.copy(camera.matrixWorld).multiply(tmpC.multiplyMatrices(Mk, tmp.fromArray(dataAt(F0).cam)).invert());
+  circle.matrixAutoUpdate = false;
+  watch.visible = true; innerLight.visible = true; shadowSig = '';
+  composer.passes[0].camera = camSeq;
+  gHeader.style.transition = gRec.style.transition = 'opacity .5s linear';
+  setTimeout(() => { gHeader.style.transition = gRec.style.transition = 'none'; }, 600);
+  mode = 'seq'; fCur = F0; fSeqEnd = WAIT; swiperGone = false;
+}
+function backToCarousel() {
+  if (state !== 'detail') return;
+  state = 'sequence';
+  eBack.style.pointerEvents = eCont.style.pointerEvents = 'none';
+  // exit correction: where the carousel's camera and ring will end up (next box centred)
+  const saved = circle.matrix.clone();
+  layout(goal - A8); circle.updateMatrix(); circle.updateMatrixWorld(true);
+  const ringEnd = circle.matrix.clone(), camEnd = camera.matrixWorld.clone();
+  circle.matrix.copy(saved); circle.updateMatrixWorld(true);
+  const dF = dataAt(F1);
+  corrCam1.copy(camEnd).multiply(tmpC.multiplyMatrices(Mk, tmp.fromArray(dF.cam)).invert());
+  corrRing1.copy(ringEnd).multiply(tmpC.multiplyMatrices(Mk, tmp.fromArray(dF.circle)).invert());
+  fCur = WAIT; fSeqEnd = F1;
+}
+eBack.addEventListener('click', backToCarousel);
+eCont.addEventListener('click', backToCarousel);
+function endSequence() {
+  // it ends with the next box centred (in your timeline, from .008 to .001)
+  goal = goal - A8; angle = goal; angVel = 0;
+  circle.matrixAutoUpdate = true; layout(angle);
+  if (closerK) { closerK.box.position.copy(closerK.pos0); closerK.box.scale.copy(closerK.s0); closerK = null; }
+  releaseBox();
+  watch.visible = false; innerLight.visible = false;
+  composer.passes[0].camera = camera;
+  uLining.value = 1; uLiningSpec.value = 1; boostSeq = 1; setSpill(null, 0);
+  for (const m of matsOf.get(boxK)) { m.envMapIntensity = m.userData.env0; if (m.userData.uDirect) m.userData.uDirect.value = 1; }
+  gHeader.style.transition = gRec.style.transition = ''; gHeader.style.opacity = gRec.style.opacity = '';
+  gHeader.classList.remove('hidden'); gRec.classList.remove('hidden');
+  eBack.style.opacity = eInfo.style.opacity = 0;
+  mode = 'carousel'; state = 'rest';
+}
+
+// carousel: the further right the knob, the more the front box's lid cracks open and the more light comes out
+const MkC = new THREE.Matrix4();
+function crackOpen() {
+  const a = KNOB_OPEN * OPEN_ANGLE * smooth(swipeProgress);
+  const c = a > 1e-5 && !drag ? centredBox() : null;
+  if (!c) { if (openK) releaseBox(); innerLight.visible = false; setSpill(null, 0); return; }
+  setSpill(c, SPILL_KNOB * smooth(swipeProgress));
+  const held = holdBox(c);
+  lidPose(a, held.lid.matrix, held.rest);
+  MkC.multiplyMatrices(c.matrixWorld, base8inv);
+  innerLight.position.fromArray(dataAt(F0).light).applyMatrix4(MkC);
+  innerLight.intensity = 742.866 * frontLight / (4 * Math.PI) * INNER_LIGHT;
+  innerLight.visible = true;
+  innerLight.distance = knobReach(swipeProgress);
+  c.updateMatrixWorld(true);
+  const sig = held.lid.matrixWorld.elements.map(x => x.toFixed(4)).join() + innerLight.position.toArray().map(x => x.toFixed(4)).join();
+  if (sig !== shadowSig) { shadowSig = sig; innerLight.shadow.needsUpdate = true; }
+}
+
+// the wall no longer hides anything: the boxes right behind it (beyond the ring's center, along the camera's
+// line of sight) are not drawn, nor in the reflection. The side ones, level with the center, show whole
+const cBack = new THREE.Vector3(), dBack = new THREE.Vector3(), vBack = new THREE.Vector3();
+const BACK_MARGIN = parseFloat(P.get('margin') ?? 2.4);
+function hideBehind(cam) {
+  cam.updateMatrixWorld(); cBack.setFromMatrixPosition(cam.matrixWorld); cam.getWorldDirection(dBack);
+  const lim = vBack.copy(ringCenter).sub(cBack).dot(dBack) + BACK_MARGIN;
+  // in the sequence the other boxes fade out while the camera moves in (470 -> 560) and return on the way back (1250 -> 1360)
+  // during the opening the others fade out (470 -> 560); in the detail view they are gone; on the way back they return at once and stay
+  const kSeq = mode !== 'seq' ? 1 : seqFrame < WAIT ? 1 - smooth((seqFrame - 470) / 90) : state === 'detail' ? 0 : 1;
+  for (const c of boxes) {
+    // while turning, those heading to the back fade out (they used to vanish in one step)
+    const back = 1;
+    setBoxOpacity(c, mode === 'seq' && c === boxK ? 1 : back * kSeq);
+  }
+}
+
+// the boxes at the back are hidden, as the wall used to, by an invisible plane just behind the ring's center (hanging from
+// Circle, so it turns with the camera): the side ones stay in front and show whole; those turning to the back go in
+// behind it instead of fading out
+const HIDER_MARGIN = parseFloat(P.get('hide') ?? 0.3);
+const hider = new THREE.Mesh(new THREE.PlaneGeometry(80, 40),
+  new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, side: THREE.DoubleSide }));
+hider.renderOrder = -0.5;       // after the wall (-1), before the boxes
+{
+  layout(0); scene.updateMatrixWorld(true);
+  const cp = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld), dir = camera.getWorldDirection(new THREE.Vector3());
+  dir.y = 0; dir.normalize();
+  const back = cp.clone().addScaledVector(dir, ringCenter.clone().sub(cp).dot(dir) + HIDER_MARGIN);
+  back.y = floorY + 15;             // the plane reaches below the floor
+  hider.position.copy(back); hider.lookAt(back.clone().sub(dir));
+  circle.attach(hider);
+  layout(angle);
+}
+
+// ---- loop ----
+let tPrev = performance.now();
+function frame(t) {
+  const dt = Math.min(0.05, (t - tPrev) / 1000); tPrev = t;
+  recentsInertia(dt);
+  if (mode === 'carousel') {
+    if (intro && !drag) {
+      const k = THREE.MathUtils.clamp((t - intro.t0) / intro.ms, 0, 1);
+      angle = goal + intro.off * Math.pow(1 - k, 3); angVel = 0;
+      if (k >= 1) intro = null;
+    } else if (!drag) {
+      // critically damped spring towards the snap
+      const k = 90, c = 2 * Math.sqrt(k);
+      const acc = -k * (angle - goal) - c * angVel;
+      angVel += acc * dt; angle += angVel * dt;
+      if (Math.abs(angle - goal) < 1e-5 && Math.abs(angVel) < 1e-4) { angle = goal; angVel = 0; }
+    } else angVel = 0;
+    layout(angle);
+    updateBrightness(t);
+    crackOpen();
+  } else {
+    const f = fCur = Math.min(fSeqEnd, fCur + dt * FPS * seqSpeed(fCur));
+    applyFrame(f);
+    if (f >= fSeqEnd) {
+      if (fSeqEnd === WAIT && state === 'sequence') { state = 'detail'; applyFrame(f); }
+      else if (fSeqEnd === F1) endSequence();
+    }
+  }
+  hideBehind(composer.passes[0].camera);
+  composer.render();
+  if (introFrames >= 0 && ++introFrames === 2) { introFrames = -1; startIntro(); }
+  requestAnimationFrame(frame);
+}
+// ---- intro ----
+const INTRO_OFF = parseFloat(P.get('intro') ?? 0.9);
+let intro = null;
+let introFrames = 0;
+function startIntro() {
+  const loading = document.getElementById('loading');
+  loading.style.opacity = 0; setTimeout(() => loading.remove(), 450);
+  document.body.classList.add('ready', 'entering');
+  intro = { t0: performance.now(), ms: 1500, off: DIR * SIGN * INTRO_OFF * STEP };
+  // the bottom swiper's animation must not stay stuck: the exit one is driven by its own .animate()
+  setTimeout(() => { document.body.classList.remove('entering'); }, 2000);
+}
+// the boxes wait out of place; the intro starts once two frames have been drawn (compiling the
+// first frame's shaders must not eat into the animation)
+intro = { t0: Infinity, ms: 1500, off: DIR * SIGN * INTRO_OFF * STEP };
+angle = goal + intro.off; layout(angle);
+requestAnimationFrame(frame);
+
+// for automated tests
+window.__proto = { THREE, scene, camera, gltf, SETTINGS, state: () => ({ angle, goal, boxes: boxes.length, SIGN, state, swipeProgress, mode, seqFrame, A8 }),
+  turn: n => { goal += n * STEP; }, open, backToCarousel,
+  activeCam: () => composer.passes[0].camera,
+  boxPositions: () => boxes.map(c => { c.updateMatrixWorld(true); return new THREE.Vector3().setFromMatrixPosition(c.matrixWorld).toArray(); }),
+  setKnob: setSwipe, holdPulse: v => { pulseHold = v; }, lidClosed: () => lidClosed,
+  jumpTo: f => { if (mode !== 'seq') startSequence(); fCur = f; fSeqEnd = f; } };
+</script>
+</body>
+</html>
